@@ -1,0 +1,9 @@
+version: 2
+
+sources:
+  - name: raw
+    catalog: media_pulse
+    schema: raw
+    tables:
+      - name: media_stream
+      - name: media_ai_insights

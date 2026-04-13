@@ -1,0 +1,141 @@
+import os
+import time
+import logging
+import schedule
+import mlflow
+from datetime import datetime, timezone
+from dotenv import load_dotenv
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.sql import StatementState
+
+from agents.graph import media_pulse_graph
+from agents.state import MediaPulseState
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger(__name__)
+
+
+def _get_client() -> WorkspaceClient:
+    return WorkspaceClient(
+        host=os.getenv("DATABRICKS_HOST"),
+        token=os.getenv("DATABRICKS_TOKEN"),
+    )
+
+
+def _mlflow_experiment_path() -> str:
+    return os.getenv("MLFLOW_EXPERIMENT_PATH", "/Users/snigdha280301/media_pulse_agents")
+
+
+def _get_warehouse_id() -> str:
+    return os.getenv("DATABRICKS_HTTP_PATH", "").split("/")[-1]
+
+
+def _sql_val(value) -> str:
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, str):
+        return f"'{value.replace(chr(39), chr(39)*2)}'"
+    return str(value)
+
+
+def query_mart_trending() -> list[dict]:
+    client = _get_client()
+    warehouse_id = _get_warehouse_id()
+
+    response = client.statement_execution.execute_statement(
+        warehouse_id=warehouse_id,
+        wait_timeout="30s",
+        statement="SELECT * FROM media_pulse.raw.media_stream ORDER BY polled_at DESC LIMIT 50",
+    )
+
+    if response.status.state != StatementState.SUCCEEDED:
+        log.error(f"Query failed: {response.status}")
+        log.error(f"Error detail: {response.status.error}")
+        return []
+
+    columns = [col.name for col in response.manifest.schema.columns]
+    rows = response.result.data_array or []
+    return [dict(zip(columns, row)) for row in rows]
+
+
+def write_insights(state: dict) -> None:
+    client = _get_client()
+    warehouse_id = _get_warehouse_id()
+
+    commentary_raw = state.get("commentary", "")
+    commentary_text = commentary_raw if isinstance(commentary_raw, str) else commentary_raw.get("commentary")
+    headline = None if isinstance(commentary_raw, str) else commentary_raw.get("headline")
+    anomaly_type = None if isinstance(commentary_raw, str) else commentary_raw.get("anomaly_type")
+
+    rankings = state.get("rankings", [])
+    top = rankings[0] if rankings else {}
+    titles_mentioned = ", ".join(r.get("title", "") for r in state.get("anomalies", []))
+
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    statement = f"""
+    INSERT INTO media_pulse.raw.media_ai_insights
+        (generated_at, headline, commentary, titles_mentioned,
+         top_title, top_media_type, anomaly_detected, anomaly_type, severity)
+    VALUES (
+        {_sql_val(generated_at)},
+        {_sql_val(headline)},
+        {_sql_val(commentary_text)},
+        {_sql_val(titles_mentioned)},
+        {_sql_val(top.get("title"))},
+        {_sql_val(top.get("media_type"))},
+        {_sql_val(state.get("anomaly_detected", False))},
+        {_sql_val(anomaly_type)},
+        {_sql_val(state.get("severity", "none"))}
+    )
+    """
+
+    response = client.statement_execution.execute_statement(
+        warehouse_id=warehouse_id,
+        wait_timeout="30s",
+        statement=statement,
+    )
+
+    if response.status.state != StatementState.SUCCEEDED:
+        log.error("Insight write failed: %s", response.status.error)
+        return
+
+    log.info("Insight written to Delta")
+
+
+def run_agents() -> None:
+    log.info("Agent run starting %s", datetime.now(timezone.utc))
+
+    rankings = query_mart_trending()
+    if not rankings:
+        log.info("No data yet")
+        return
+
+    initial_state = MediaPulseState(
+        rankings=rankings,
+        anomalies=[],
+        commentary={},
+        titles_mentioned=[],
+        severity="none",
+        anomaly_detected=False,
+        run_id=str(datetime.now(timezone.utc)),
+        polled_at=str(datetime.now(timezone.utc)),
+        error=None,
+    )
+
+    mlflow.set_experiment(_mlflow_experiment_path())
+    final_state = media_pulse_graph.invoke(initial_state)
+
+    write_insights(final_state)
+    log.info("Agent run complete")
+
+
+if __name__ == "__main__":
+    load_dotenv()
+    run_agents()
+    schedule.every(15).minutes.do(run_agents)
+    while True:
+        schedule.run_pending()
+        time.sleep(30)

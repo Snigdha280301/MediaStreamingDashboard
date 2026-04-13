@@ -1,0 +1,14 @@
+python-dotenv
+requests
+great-expectations
+pyspark
+delta-spark
+dbt-databricks
+langgraph>=0.2.0
+langchain
+langchain-anthropic
+mlflow
+pandas
+anthropic
+databricks-sdk
+schedule
