@@ -40,6 +40,21 @@ def _sql_val(value) -> str:
     return str(value)
 
 
+def _wait_for_statement(client: WorkspaceClient, statement_id: str, poll_interval: int = 2, max_wait: int = 120):
+    import time
+    elapsed = 0
+    while elapsed < max_wait:
+        response = client.statement_execution.get_statement(statement_id)
+        if response.status.state == StatementState.SUCCEEDED:
+            return response
+        if response.status.state in (StatementState.FAILED, StatementState.CANCELED, StatementState.CLOSED):
+            return response
+        time.sleep(poll_interval)
+        elapsed += poll_interval
+    log.error("Statement %s timed out after %ds", statement_id, max_wait)
+    return response
+
+
 def query_mart_trending() -> list[dict]:
     client = _get_client()
     warehouse_id = _get_warehouse_id()
@@ -49,6 +64,9 @@ def query_mart_trending() -> list[dict]:
         wait_timeout="30s",
         statement="SELECT * FROM media_pulse.raw.media_stream ORDER BY polled_at DESC LIMIT 50",
     )
+
+    if response.status.state == StatementState.PENDING:
+        response = _wait_for_statement(client, response.statement_id)
 
     if response.status.state != StatementState.SUCCEEDED:
         log.error(f"Query failed: {response.status}")

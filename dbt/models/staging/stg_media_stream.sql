@@ -1,18 +1,23 @@
-with source as (
-    select * from {{ source('raw', 'media_stream') }}
-),
+{{ config(materialized='view') }}
 
-renamed as (
-    select
-        cast(tmdb_id    as bigint)    as tmdb_id,
-        cast(title      as string)    as title,
-        cast(media_type as string)    as media_type,
-        cast(rank       as int)       as rank,
-        cast(popularity as double)    as popularity,
-        cast(polled_at as timestamp) as polled_at
-    from source
-    where tmdb_id is not null
-      and title   is not null
-)
-
-select * from renamed
+SELECT
+    tmdb_id,
+    title,
+    media_type,
+    rank,
+    previous_rank,
+    rank_change,
+    popularity,
+    vote_average,
+    vote_count,
+    genre_ids,
+    overview,
+    release_date,
+    original_language,
+    endpoint_source,
+    CAST(polled_at AS TIMESTAMP) AS polled_at,
+    DATE(polled_at) AS poll_date,
+    HOUR(polled_at) AS poll_hour
+FROM {{ source('raw', 'media_stream') }}
+WHERE title IS NOT NULL
+  AND tmdb_id IS NOT NULL
