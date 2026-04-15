@@ -24,7 +24,12 @@ class AgentState(TypedDict):
     rankings: list[MediaRecord]
     anomalies: list[MediaRecord]
     commentary: str
-    alert_level: Optional[str]
+    severity: Optional[str]
+    anomaly_detected: bool
+    titles_mentioned: list[str]
+    run_id: Optional[str]
+    polled_at: Optional[str]
+    error: Optional[str]
 
 
 class MediaPulseState(TypedDict):

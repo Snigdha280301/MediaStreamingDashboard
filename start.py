@@ -10,6 +10,7 @@ from databricks.sdk.service.sql import StatementState
 
 from agents.graph import media_pulse_graph
 from agents.state import MediaPulseState
+from ingestion.ingest import run_ingestion
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -85,13 +86,21 @@ def write_insights(state: dict) -> None:
     commentary_raw = state.get("commentary", "")
     commentary_text = commentary_raw if isinstance(commentary_raw, str) else commentary_raw.get("commentary")
     headline = None if isinstance(commentary_raw, str) else commentary_raw.get("headline")
-    anomaly_type = None if isinstance(commentary_raw, str) else commentary_raw.get("anomaly_type")
+
+    # get anomaly info from state directly not from commentary
+    anomalies = state.get("anomalies", [])
+    anomaly_detected = state.get("anomaly_detected", False)
+    severity = state.get("severity", "none")
+    anomaly_type = anomalies[0].get("anomaly_type") if anomalies else None
 
     rankings = state.get("rankings", [])
     top = rankings[0] if rankings else {}
-    titles_mentioned = ", ".join(r.get("title", "") for r in state.get("anomalies", []))
+    titles_mentioned = ", ".join(r.get("title", "") for r in anomalies)
 
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    # convert bool to SQL boolean string
+    anomaly_detected_sql = "true" if anomaly_detected else "false"
 
     statement = f"""
     INSERT INTO media_pulse.raw.media_ai_insights
@@ -104,9 +113,9 @@ def write_insights(state: dict) -> None:
         {_sql_val(titles_mentioned)},
         {_sql_val(top.get("title"))},
         {_sql_val(top.get("media_type"))},
-        {_sql_val(state.get("anomaly_detected", False))},
+        {anomaly_detected_sql},
         {_sql_val(anomaly_type)},
-        {_sql_val(state.get("severity", "none"))}
+        {_sql_val(severity)}
     )
     """
 
@@ -125,6 +134,9 @@ def write_insights(state: dict) -> None:
 
 def run_agents() -> None:
     log.info("Agent run starting %s", datetime.now(timezone.utc))
+
+    log.info("Fetching fresh data from TMDB...")
+    run_ingestion()
 
     rankings = query_mart_trending()
     if not rankings:
@@ -145,6 +157,19 @@ def run_agents() -> None:
 
     mlflow.set_experiment(_mlflow_experiment_path())
     final_state = media_pulse_graph.invoke(initial_state)
+
+    # MLflow tracking
+    with mlflow.start_run():
+        mlflow.log_param("poll_timestamp", str(datetime.now(timezone.utc)))
+        mlflow.log_metric("titles_processed", len(final_state.get("rankings", [])))
+        mlflow.log_metric("anomalies_found", len(final_state.get("anomalies", [])))
+        mlflow.log_metric("high_severity_count", 
+            sum(1 for a in final_state.get("anomalies", []) 
+                if a.get("severity") == "high"))
+        mlflow.set_tag("top_title", 
+            final_state.get("rankings", [{}])[0].get("title", "none") 
+            if final_state.get("rankings") else "none")
+        mlflow.set_tag("severity", final_state.get("severity", "none"))
 
     write_insights(final_state)
     log.info("Agent run complete")

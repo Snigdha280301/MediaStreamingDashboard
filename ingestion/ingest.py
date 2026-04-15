@@ -31,6 +31,20 @@ def _sql_val(value) -> str:
     return str(value)
 
 
+def _wait_for_statement(client: WorkspaceClient, statement_id: str, poll_interval: int = 2, max_wait: int = 120):
+    elapsed = 0
+    while elapsed < max_wait:
+        response = client.statement_execution.get_statement(statement_id)
+        if response.status.state == StatementState.SUCCEEDED:
+            return response
+        if response.status.state in (StatementState.FAILED, StatementState.CANCELED, StatementState.CLOSED):
+            return response
+        time.sleep(poll_interval)
+        elapsed += poll_interval
+    log.error("Statement %s timed out after %ds", statement_id, max_wait)
+    return response
+
+
 def _write_records(records: list[dict], client: WorkspaceClient, warehouse_id: str) -> None:
     rows = ", ".join(
         "({})".format(", ".join([
@@ -64,7 +78,9 @@ def _write_records(records: list[dict], client: WorkspaceClient, warehouse_id: s
         wait_timeout="30s",
         statement=statement,
     )
-    if response.status.state not in (StatementState.SUCCEEDED,):
+    if response.status.state == StatementState.PENDING:
+        response = _wait_for_statement(client, response.statement_id)
+    if response.status.state != StatementState.SUCCEEDED:
         raise RuntimeError(f"Insert failed: {response.status.error}")
 
 
