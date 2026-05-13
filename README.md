@@ -1,6 +1,6 @@
 # Real-Time Media Intelligence Pipeline
 
-A real-time data streaming and AI insights pipeline pulling continuously from TMDB, validating data with Great Expectations, storing in Delta Lake (Databricks), transforming with dbt, and utilizing a LangGraph multi-agent system (tracked by MLflow) to deliver predictive insights to Power BI dashboards.
+A real-time data streaming and AI insights pipeline pulling continuously from TMDB, validating data with Great Expectations, storing in Delta Lake (Databricks), transforming with dbt, and utilizing a LangGraph (tracked by MLflow) to deliver predictive insights to Power BI dashboards.
 
 ## Stack Overview
 - **Data Source:** TMDB Official API
